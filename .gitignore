@@ -1,0 +1,14 @@
+# Local app data (JSON, etc.)
+data/
+
+# Local virtual environments (you named it "versions")
+versions/
+
+# Common Python/OS junk (nice to have)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.DS_Store
+.ipynb_checkpoints/
