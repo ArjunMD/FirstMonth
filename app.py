@@ -672,6 +672,62 @@ def status_checkbox_group(*, key_base: str, current: str = "Untried") -> str:
 
     return st.session_state[f"{key_base}__status"]
 
+def pretty_event_label(e: Dict[str, Any]) -> str:
+    """Label for an event (used in Recent events titles)."""
+    et = str(e.get("type") or "").strip().lower()
+
+    if et == "feeding":
+        mode = (e.get("feed_mode") or "").strip().lower()
+        base = "Breastfeed" if mode == "breast" else ("Bottle feed" if mode == "bottle" else "Feeding")
+
+        ml = feeding_intake_ml(e)
+        if ml is not None and float(ml) > 0:
+            oz = ml_to_floz(float(ml))
+            return f"{base} - {oz:.2f} oz"
+        return base
+
+    if et == "pumping":
+        total_ml = e.get("pump_total_ml")
+        if total_ml is None:
+            left = e.get("pump_left_ml")
+            right = e.get("pump_right_ml")
+            if left is not None or right is not None:
+                total_ml = float(left or 0.0) + float(right or 0.0)
+
+        if total_ml is not None and float(total_ml) > 0:
+            oz = ml_to_floz(float(total_ml))
+            return f"Pumping - {oz:.2f} oz"
+        return "Pumping"
+
+    if et == "diaper":
+        desc = e.get("descriptor") or []
+        if isinstance(desc, list):
+            desc = [str(x).strip() for x in desc if str(x).strip()]
+        else:
+            desc = []
+
+        if desc:
+            return "Diaper change - " + ", ".join(desc)
+        return "Diaper change"
+
+    if et == "weight":
+        w = e.get("weight_g")
+        cond = (e.get("condition") or "").strip()
+        if w is not None:
+            try:
+                w0 = float(w)
+                cond_part = f" ({cond})" if cond else ""
+                return f"Weight - {w0:,.0f} g{cond_part}"
+            except Exception:
+                pass
+        return "Weight"
+
+    if et == VITD_EVENT_TYPE:
+        return "Vitamin D"
+
+    # fallback
+    return (e.get("type") or "Event").replace("_", " ").title()
+
 
 # =============================================================================
 # Tab renderers
@@ -1378,7 +1434,7 @@ def render_event_tracker_tab() -> None:
             current_day = day_key
 
         time_str = dt.strftime("%H:%M") if dt is not None else tstamp
-        title = f"{time_str} — {et}"
+        title = f"{time_str} — {pretty_event_label(e)}"
 
         with st.expander(title, expanded=False):
             ed = iso_to_dt(e["ts"])
