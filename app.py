@@ -503,56 +503,41 @@ def adjusted_weight_if_plotworthy(
 
 def weight_for_event_row(e: Dict[str, Any]) -> Optional[float]:
     """
-    One plotted weight value per event (keeps x-axis event-based).
-
-    Priority:
-      1) Random weight event weight_g
-      2) Feeding pre-weight (if present)
+    Only random weight events are plotted (naked or clean-diaper).
     """
-    etype = e.get("type")
-    if etype == "weight":
-        return adjusted_weight_if_plotworthy(
-            e.get("weight_g"),
-            e.get("condition"),
-            e.get("diaper_tare_g"),
-        )
-    if etype == "feeding":
-        return adjusted_weight_if_plotworthy(
-            e.get("pre_weight_g"),
-            e.get("pre_condition"),
-            e.get("pre_diaper_tare_g"),
-        )
-    return None
+    if e.get("type") != "weight":
+        return None
+
+    return adjusted_weight_if_plotworthy(
+        e.get("weight_g"),
+        e.get("condition"),
+        e.get("diaper_tare_g"),
+    )
 
 
 def recent_naked_weights(events: List[Dict[str, Any]], n: int = 3) -> List[Dict[str, Any]]:
     """
     Return up to n most recent naked weights with timestamps.
-
-    Sources:
-      - Random weight events with condition == "naked"
-      - Feeding events with pre_condition == "naked" and pre_weight_g present
     """
     out: List[Dict[str, Any]] = []
 
     for e in sorted(events, key=lambda x: x.get("ts", ""), reverse=True):
         ts = e.get("ts")
-        if not ts:
+        if not ts or e.get("type") != "weight":
             continue
+
         try:
             dt = iso_to_dt(ts)
         except Exception:
             continue
 
-        etype = e.get("type")
+        if (e.get("condition") or "").strip().lower() != "naked":
+            continue
 
-        if etype == "weight":
-            if (e.get("condition") or "").strip().lower() == "naked" and e.get("weight_g") is not None:
-                out.append({"dt": dt, "weight_g": float(e["weight_g"]), "source": "weight"})
-        elif etype == "feeding":
-            if (e.get("pre_condition") or "").strip().lower() == "naked" and e.get("pre_weight_g") is not None:
-                out.append({"dt": dt, "weight_g": float(e["pre_weight_g"]), "source": "pre-weight"})
+        if e.get("weight_g") is None:
+            continue
 
+        out.append({"dt": dt, "weight_g": float(e["weight_g"]), "source": "weight"})
         if len(out) >= n:
             break
 
@@ -584,9 +569,10 @@ def feeding_intake_ml(e: Dict[str, Any]) -> Optional[float]:
     Return intake for feeding events in mL.
 
     - Bottle: bottle_ml
-    - Breast: prefer delta_g (treated as mL), else (post-pre) weights (treated as mL)
+    - Breast: delta_g (treated as mL)
 
-    Assumption: 1 g ~= 1 mL for milk transfer.
+    Legacy support: if delta_g missing, falls back to (post-pre) weights if present.
+    Assumption: 1 g ~= 1 mL.
     """
     if e.get("type") != "feeding":
         return None
@@ -596,11 +582,13 @@ def feeding_intake_ml(e: Dict[str, Any]) -> Optional[float]:
         ml = e.get("bottle_ml")
         return float(ml) if ml else None
 
-    # Breast
-    if e.get("delta_g") is not None:
-        dg = float(e.get("delta_g") or 0.0)
+    # Breast (preferred)
+    dg = e.get("delta_g")
+    if dg is not None:
+        dg = float(dg or 0.0)
         return dg if dg > 0 else None
 
+    # Legacy fallback (old events may have used pre/post, but unsure how many actually did)
     pre = e.get("pre_weight_g")
     post = e.get("post_weight_g")
     if pre is None or post is None:
@@ -608,6 +596,7 @@ def feeding_intake_ml(e: Dict[str, Any]) -> Optional[float]:
 
     delta = float(post) - float(pre)
     return delta if delta > 0 else None
+
 
 
 def _toggle_side(side: str) -> str:
@@ -956,7 +945,7 @@ def render_calculator_tab() -> None:
         grams: Optional[float] = None
 
         if source == "Recent":
-            st.caption("Showing recent **naked** weights (from random weights + feeding pre-weights).")
+            st.caption("Showing recent **naked** weights (from random weight events).")
 
             labels: List[str] = []
             for item in recent:
@@ -1201,40 +1190,18 @@ def render_event_tracker_tab() -> None:
                         flash_and_rerun("Added bottle feed.")
 
             else:
-                st.markdown("**Optional pre/post weights**")
-                pre_cond_col, tare_col = st.columns([2, 3])
-
-                with pre_cond_col:
-                    pre_condition = st.selectbox(
-                        "Clothing (pre-weight)",
-                        ["(blank)", "naked", "clean diaper", "clothed"],
-                        index=0,
-                        key="add_pre_condition",
-                    )
-
-                pre_diaper_tare_g: Optional[float] = None
-                if pre_condition == "clean diaper":
-                    st.session_state.setdefault(
-                        "add_pre_diaper_tare_g",
-                        float(st.session_state.get("last_diaper_tare_g", DIAPER_TARE_G)),
-                    )
-                    with tare_col:
-                        pre_diaper_tare_g = st.number_input(
-                            "Diaper tare (g) for this event",
-                            min_value=0.0,
-                            step=1.0,
-                            key="add_pre_diaper_tare_g",
-                            help="Stored on this breastfeed event (used when pre-weight is diaper-only). Defaults to your last-used tare.",
-                        )
-
                 with st.form("add_breast_form", clear_on_submit=True):
                     _, suggested_next = breast_side_status(events)
-                    start_side = st.radio("Starting side (required)", ["L", "R"], index=0 if suggested_next == "L" else 1, horizontal=True)
+                    start_side = st.radio(
+                        "Starting side (required)",
+                        ["L", "R"],
+                        index=0 if suggested_next == "L" else 1,
+                        horizontal=True,
+                    )
 
                     delta_text = st.text_input(
                         "Delta (g) — enter a number only (no units). "
-                        "If unweighted feed, enter a conservative estimate here. "
-                        "Leave blank if you’re using pre/post weights instead.",
+                        "If unweighted feed, enter a conservative estimate here.",
                         placeholder="e.g. 32",
                     )
                     delta_g = None
@@ -1245,33 +1212,9 @@ def render_event_tracker_tab() -> None:
                         else:
                             st.caption(f"≈ {ml_to_floz(delta_g):.2f} oz (assuming 1 g ≈ 1 mL)")
 
-                    pre_col, post_col = st.columns(2)
-                    with pre_col:
-                        pre_text = st.text_input("Pre-weight (g)", placeholder="e.g. 3245")
-                    with post_col:
-                        post_text = st.text_input("Post-weight (g)", placeholder="e.g. 3270")
-
-                    pre_g = parse_number_only(pre_text) if pre_text.strip() else None
-                    post_g = parse_number_only(post_text) if post_text.strip() else None
-
-                    if pre_text.strip() and pre_g is None:
-                        st.warning("Pre-weight must be a number in grams only (e.g., `3245`). No units.")
-                    if post_text.strip() and post_g is None:
-                        st.warning("Post-weight must be a number in grams only (e.g., `3270`). No units.")
-
-                    notes = st.text_input("Notes (optional)", placeholder="Side, latch, duration, etc.")
+                    notes = st.text_input("Notes (optional)", placeholder="Latch, duration, etc.")
                     submitted = st.form_submit_button("Add feeding")
                     if submitted:
-                        pre_tare_to_store = None
-                        if pre_condition == "clean diaper":
-                            try:
-                                pre_tare_to_store = float(pre_diaper_tare_g) if pre_diaper_tare_g is not None else None
-                            except Exception:
-                                pre_tare_to_store = None
-                            if pre_tare_to_store is not None and pre_tare_to_store > 0:
-                                st.session_state["last_diaper_tare_g"] = pre_tare_to_store
-                                persist_settings({"last_diaper_tare_g": pre_tare_to_store})
-
                         e = {
                             "id": str(uuid.uuid4()),
                             "type": "feeding",
@@ -1281,13 +1224,10 @@ def render_event_tracker_tab() -> None:
                             "bottle_ml": None,
                             "delta_g": float(delta_g) if (delta_g is not None and delta_g > 0) else None,
                             "notes": notes.strip() if notes else "",
-                            "pre_weight_g": float(pre_g) if pre_g is not None else None,
-                            "pre_condition": None if pre_condition == "(blank)" else pre_condition,
-                            "pre_diaper_tare_g": pre_tare_to_store,
-                            "post_weight_g": float(post_g) if post_g is not None else None,
                         }
                         add_event(events, e)
                         flash_and_rerun("Added breastfeed.")
+
 
         elif etype == "Pumping":
             p_unit = st.radio(
@@ -1537,7 +1477,11 @@ def render_event_tracker_tab() -> None:
                         key=f"ed_startside_{e['id']}",
                     )
 
-                    new_delta_txt = st.text_input("Delta (g)", value=fmt_g(e.get("delta_g")), key=f"ed_delta_{e['id']}")
+                    new_delta_txt = st.text_input(
+                        "Delta (g)",
+                        value=fmt_g(e.get("delta_g")),
+                        key=f"ed_delta_{e['id']}",
+                    )
                     new_delta_g = None
                     if new_delta_txt.strip():
                         new_delta_g = parse_number_only(new_delta_txt)
@@ -1545,58 +1489,15 @@ def render_event_tracker_tab() -> None:
                             st.warning("Delta must be a number in grams only (e.g., `32` or `32.5`). No units.")
                         else:
                             st.caption(f"≈ {ml_to_floz(new_delta_g):.2f} oz (assuming 1 g ≈ 1 mL)")
-                    else:
-                        st.caption("Leave blank if you’re using pre/post weights instead.")
-
-                    pre_txt = st.text_input("Pre-weight (g)", value=fmt_g(e.get("pre_weight_g")), key=f"ed_pre_{e['id']}")
-
-                    cur_pre_cond = e.get("pre_condition") or "(blank)"
-                    if cur_pre_cond not in PRE_COND_OPTIONS:
-                        cur_pre_cond = "other"
-
-                    pre_cond = st.selectbox(
-                        "Pre condition",
-                        PRE_COND_OPTIONS,
-                        index=PRE_COND_OPTIONS.index(cur_pre_cond),
-                        key=f"ed_precond_{e['id']}",
-                    )
-
-                    if pre_cond == "clean diaper":
-                        default_tare = e.get("pre_diaper_tare_g")
-                        if default_tare is None:
-                            default_tare = st.session_state.get("last_diaper_tare_g", DIAPER_TARE_G)
-                        pre_tare = st.number_input(
-                            "Diaper tare (g) for this event",
-                            min_value=0.0,
-                            step=1.0,
-                            value=float(default_tare),
-                            key=f"ed_pretare_{e['id']}",
-                            help="Applies to the pre-weight when it was taken with a clean diaper.",
-                        )
-                        patch["pre_diaper_tare_g"] = float(pre_tare) if pre_tare and pre_tare > 0 else None
-                    else:
-                        patch["pre_diaper_tare_g"] = None
-
-                    post_txt = st.text_input("Post-weight (g)", value=fmt_g(e.get("post_weight_g")), key=f"ed_post_{e['id']}")
-
-                    pre_g = parse_number_only(pre_txt) if pre_txt.strip() else None
-                    post_g = parse_number_only(post_txt) if post_txt.strip() else None
-
-                    if pre_txt.strip() and pre_g is None:
-                        st.warning("Pre-weight must be a number in grams only (e.g., `3245`). No units.")
-                    if post_txt.strip() and post_g is None:
-                        st.warning("Post-weight must be a number in grams only (e.g., `3270`). No units.")
 
                     patch.update(
                         {
                             "bottle_ml": None,
-                            "delta_g": float(new_delta_g) if new_delta_g is not None else None,
                             "start_side": start_side,
-                            "pre_weight_g": float(pre_g) if pre_g is not None else None,
-                            "pre_condition": None if pre_cond == "(blank)" else pre_cond,
-                            "post_weight_g": float(post_g) if post_g is not None else None,
+                            "delta_g": float(new_delta_g) if new_delta_g is not None else None,
                         }
                     )
+
 
             elif et == "weight":
                 w_txt = st.text_input("Weight (g)", value=fmt_g(e.get("weight_g")), key=f"ed_w_{e['id']}")
@@ -2056,12 +1957,10 @@ def render_graph_tab() -> None:
 
     with st.expander("Info"):
         st.write(
-            "- Each event gets at most **one** plotted weight value:\n"
-            "  - Random weight event weight\n"
-            "  - Else feeding **pre-weight** (if present)\n"
-            "- Only **naked** and **diaper-only** weights are plotted.\n"
+            "- Only **random weight** events are plotted.\n"
             f"- Diaper-only weights subtract the event’s recorded diaper tare (default **{DIAPER_TARE_G:.0f} g**)."
         )
+
 
 
 def render_thank_you_tab() -> None:
