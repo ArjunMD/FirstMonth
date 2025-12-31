@@ -1724,11 +1724,17 @@ def render_graph_tab() -> None:
                 ),
             )
 
+        x_enc = alt.X(
+            "time:T",
+            title="Date",
+            axis=alt.Axis(format="%m/%d", labelAngle=0),
+        )
+
         line = (
             alt.Chart(df_w)
             .mark_line()
             .encode(
-                x=alt.X("time:T", title="Time"),
+                x=x_enc,
                 y=y_enc,
                 tooltip=[
                     alt.Tooltip("time:T", title="Time"),
@@ -1744,7 +1750,7 @@ def render_graph_tab() -> None:
             alt.Chart(df_w)
             .mark_point()
             .encode(
-                x="time:T",
+                x=x_enc,
                 y=y_enc,
                 tooltip=[
                     alt.Tooltip("time:T", title="Time"),
