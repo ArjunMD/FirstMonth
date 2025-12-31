@@ -1784,7 +1784,10 @@ def render_graph_tab() -> None:
         ml = feeding_intake_ml(e)
         if ml is None:
             continue
-        feed_rows.append({"time": dt, "intake_ml": float(ml)})
+
+        mode = str(e.get("feed_mode") or "").strip().lower()
+        feed_rows.append({"time": dt, "intake_ml": float(ml), "mode": mode})
+
 
     if not feed_rows:
         st.info("No feeding amounts recorded in the last 3 days.")
@@ -1901,11 +1904,17 @@ def render_graph_tab() -> None:
         y_title = "Cumulative intake (mL)"
         val_fmt = ".0f"
 
+    hour_ticks = list(range(0, 24 * 60 + 1, 60))  # 0, 60, 120, ... 1440
+
     x_enc = alt.X(
         "minute:Q",
         title="Time of day",
         scale=alt.Scale(domain=[0, 24 * 60], nice=False, zero=True),
-        axis=alt.Axis(tickCount=13, labelExpr="floor(datum.value/60) + ':' + format(datum.value % 60, '02d')"),
+        axis=alt.Axis(
+            values=hour_ticks,  # force ticks at exact hours only
+            labelExpr="format(floor(datum.value/60), '02d') + ':00'",
+            labelOverlap="greedy",
+        ),
     )
 
     line = (
@@ -1914,7 +1923,11 @@ def render_graph_tab() -> None:
         .encode(
             x=x_enc,
             y=alt.Y("Value:Q", title=y_title),
-            color=alt.Color("Day:N", title=None),
+            color=alt.Color(
+                "Day:N",
+                title=None,
+                sort=alt.SortField(field="day", order="ascending"),
+            ),
             tooltip=[
                 alt.Tooltip("Day:N", title="Day"),
                 alt.Tooltip("minute:Q", title="Time (min)"),
@@ -1929,14 +1942,26 @@ def render_graph_tab() -> None:
         .encode(
             x="minute:Q",
             y="Value:Q",
-            color=alt.Color("Day:N", title=None),
+            color=alt.Color(
+                "Day:N",
+                title=None,
+                sort=alt.SortField(field="day", order="ascending"),
+            ),
+            shape=alt.Shape(
+                "mode:N",
+                title=None,
+                scale=alt.Scale(domain=["breast", "bottle"], range=["circle", "square"]),
+                legend=None,
+            ),
             tooltip=[
                 alt.Tooltip("Day:N", title="Day"),
                 alt.Tooltip("time:T", title="Time"),
+                alt.Tooltip("mode:N", title="Type"),
                 alt.Tooltip("Value:Q", title="Cumulative", format=val_fmt),
             ],
         )
     )
+
 
     goal_layer = None
     if goal_floz_today is not None and goal_floz_today > 0:
