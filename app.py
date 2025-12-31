@@ -878,6 +878,9 @@ def render_snapshot_tab() -> None:
             else:
                 st.caption(f"Behind pace for midnight ({abs(delta):.2f} oz behind steady pace).")
 
+
+
+
             st.divider()
             st.markdown("##### Previous days")
             st.dataframe(pd.DataFrame(prev_rows), hide_index=True, width="stretch")
@@ -1848,50 +1851,7 @@ def render_graph_tab() -> None:
     midnight2 = datetime.combine(today, time(0, 0, 0))
     elapsed_hours = max((now_dt2 - midnight2).total_seconds() / 3600.0, 1e-6)
 
-    if goal_floz_today is not None and goal_floz_today > 0:
-        remaining_floz = max(goal_floz_today - today_total_floz, 0.0)
-        remaining_hours = max(24.0 - elapsed_hours, 1e-6)
 
-        pct = min(today_total_floz / goal_floz_today, 1.0)
-
-        actual_oz_per_hr = today_total_floz / elapsed_hours
-        goal_oz_per_hr = goal_floz_today / 24.0
-        needed_oz_per_hr = remaining_floz / remaining_hours
-
-        expected_by_now = goal_floz_today * (elapsed_hours / 24.0)
-        on_track_delta = today_total_floz - expected_by_now
-
-        r1c1, r1c2, r1c3 = st.columns(3)
-        with r1c1:
-            st.metric("Today so far", f"{today_total_floz:.2f} oz")
-        with r1c2:
-            st.metric("Goal", f"{goal_floz_today:.1f} oz")
-        with r1c3:
-            st.metric("Remaining", f"{remaining_floz:.2f} oz")
-
-        r2c1, r2c2, r2c3 = st.columns(3)
-        with r2c1:
-            st.metric("Actual pace", f"{actual_oz_per_hr:.2f} oz/hr")
-        with r2c2:
-            st.metric("Goal pace", f"{goal_oz_per_hr:.2f} oz/hr")
-        with r2c3:
-            st.metric("Needed pace", f"{needed_oz_per_hr:.2f} oz/hr")
-
-        st.progress(pct)
-
-        if on_track_delta >= 0:
-            st.caption(f"On track (ahead by {on_track_delta:.2f} oz vs pace-to-goal by now).")
-        else:
-            st.caption(f"Behind pace (need {abs(on_track_delta):.2f} oz to be on pace by now).")
-    else:
-        st.caption("Set a feeding goal in the Calculator tab to show a goal line + progress here.")
-        m1, m2, m3 = st.columns(3)
-        with m1:
-            st.metric("Today so far", f"{today_total_floz:.2f} oz")
-        with m2:
-            st.metric("Actual pace", f"{(today_total_floz / elapsed_hours):.2f} oz/hr")
-        with m3:
-            st.metric("Today so far", f"{today_total_ml:,.0f} mL")
 
     if units == "oz":
         df_line["Value"] = df_line["cum_ml"].apply(ml_to_floz)
@@ -1981,10 +1941,84 @@ def render_graph_tab() -> None:
 
     st.altair_chart(chart.properties(height=320), width="stretch")
 
+
+    if goal_floz_today is not None and goal_floz_today > 0:
+        remaining_floz = max(goal_floz_today - today_total_floz, 0.0)
+        remaining_hours = max(24.0 - elapsed_hours, 1e-6)
+
+        pct = min(today_total_floz / goal_floz_today, 1.0)
+
+        actual_oz_per_hr = today_total_floz / elapsed_hours
+        goal_oz_per_hr = goal_floz_today / 24.0
+        needed_oz_per_hr = remaining_floz / remaining_hours
+
+        expected_by_now = goal_floz_today * (elapsed_hours / 24.0)
+        on_track_delta = today_total_floz - expected_by_now
+
+        r1c1, r1c2, r1c3 = st.columns(3)
+        with r1c1:
+            st.metric("Today so far", f"{today_total_floz:.2f} oz")
+        with r1c2:
+            st.metric("Goal", f"{goal_floz_today:.1f} oz")
+        with r1c3:
+            st.metric("Remaining", f"{remaining_floz:.2f} oz")
+
+        r2c1, r2c2, r2c3 = st.columns(3)
+        with r2c1:
+            st.metric("Actual pace", f"{actual_oz_per_hr:.2f} oz/hr")
+        with r2c2:
+            st.metric("Goal pace", f"{goal_oz_per_hr:.2f} oz/hr")
+        with r2c3:
+            st.metric("Needed pace", f"{needed_oz_per_hr:.2f} oz/hr")
+
+        st.progress(pct)
+
+        if on_track_delta >= 0:
+            st.caption(f"On track (ahead by {on_track_delta:.2f} oz vs pace-to-goal by now).")
+        else:
+            st.caption(f"Behind pace (need {abs(on_track_delta):.2f} oz to be on pace by now).")
+        
+        # Yesterday-by-now (actual logged feeds) + next feed time yesterday
+        yday = today - timedelta(days=1)
+        yday_df = df_feed[df_feed["day"] == yday].sort_values("minute")
+
+        if yday_df.empty:
+            st.caption("Yesterday by this time: no feeds recorded.")
+        else:
+            upto = yday_df[yday_df["minute"] <= now_min]
+            yday_by_now_ml = float(upto["cum_ml"].iloc[-1]) if not upto.empty else 0.0
+
+            next_row = yday_df[yday_df["minute"] > now_min].head(1)
+            next_time_str = (
+                next_row["time"].iloc[0].strftime("%H:%M") if not next_row.empty else "no later feed recorded"
+            )
+
+            if units == "oz":
+                amt_str = f"{ml_to_floz(yday_by_now_ml):.2f} oz"
+            else:
+                amt_str = f"{yday_by_now_ml:,.0f} mL"
+
+            st.caption(f"Yesterday by this time: {amt_str}; next feed was at {next_time_str}.")
+
+    else:
+        st.caption("Set a feeding goal in the Calculator tab to show a goal line + progress here.")
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            st.metric("Today so far", f"{today_total_floz:.2f} oz")
+        with m2:
+            st.metric("Actual pace", f"{(today_total_floz / elapsed_hours):.2f} oz/hr")
+        with m3:
+            st.metric("Today so far", f"{today_total_ml:,.0f} mL")
+
+
     daily = df_feed.groupby("day", as_index=False)["intake_ml"].sum()
     daily["intake_oz"] = daily["intake_ml"].apply(ml_to_floz)
     daily = daily.sort_values("day")
     st.dataframe(daily[["day", "intake_oz"]], hide_index=True, width="stretch")
+
+
+
+
 
     with st.expander("Info"):
         st.write(
@@ -2471,6 +2505,9 @@ def main() -> None:
     st.session_state.setdefault("goal_date", s.get("goal_date", str(date.today())))
     st.session_state.setdefault("calc_weight_source", s.get("calc_weight_source", "Recent"))
     st.session_state.setdefault("calc_recent_idx", s.get("calc_recent_idx", 0))
+    st.session_state.setdefault("weight_y_units", "lb/oz")
+    st.session_state.setdefault("intake_units", "oz")
+
 
     # Last-used diaper tare (default fallback)
     _last_tare = s.get("last_diaper_tare_g", DIAPER_TARE_G)
