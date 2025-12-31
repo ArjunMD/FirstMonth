@@ -424,38 +424,47 @@ def format_snapshot_dt(dt: datetime) -> str:
     return f"{dt.strftime('%b')} {dt.day}, {dt.strftime('%H:%M')}"
 
 
-def time_selectbox(
+def time_picker(
     label: str,
     default: time,
     *,
     key: str,
-    step_minutes: int = 1,
+    show_quick: bool = True,
 ) -> time:
-    """Dropdown time selector that opens near the current selection."""
-    step_minutes = max(1, int(step_minutes))
+    """
+    Native time input + quick back buttons.
+    Avoids Streamlit warning by NOT passing value= once session_state has the key.
+    """
+    widget_key = f"{key}__ti"
 
-    options: List[time] = []
-    for h in range(24):
-        for m in range(0, 60, step_minutes):
-            options.append(time(h, m, 0))
+    # Initialize the widget's state BEFORE creating the widget
+    if widget_key not in st.session_state:
+        st.session_state[widget_key] = default.replace(second=0, microsecond=0)
 
-    # Snap default to nearest step
-    total = default.hour * 60 + default.minute
-    snapped = int(round(total / step_minutes) * step_minutes) % (24 * 60)
-    default_snapped = time(snapped // 60, snapped % 60, 0)
+    def _shift_minutes(delta_min: int) -> None:
+        cur: time = st.session_state.get(widget_key) or default
+        base = datetime.combine(date.today(), cur)
+        st.session_state[widget_key] = (base + timedelta(minutes=int(delta_min))).time().replace(
+            second=0, microsecond=0
+        )
 
-    try:
-        idx = options.index(default_snapped)
-    except ValueError:
-        idx = 0
+    picked: time = st.time_input(label, key=widget_key)
+    picked = picked.replace(second=0, microsecond=0)
 
-    return st.selectbox(
-        label,
-        options=options,
-        index=idx,
-        key=key,
-        format_func=lambda t: t.strftime("%H:%M"),
-    )
+    if show_quick:
+        def _set_now() -> None:
+            st.session_state[widget_key] = datetime.now().time().replace(second=0, microsecond=0)
+
+        # One row, only 3 buttons -> wide enough to avoid ugly wrapping
+        c1, c2, c3 = st.columns([1, 1, 1], gap="small")
+
+        c1.button("Now",  key=f"{key}__now", on_click=_set_now, use_container_width=True)
+        c2.button("−5m",  key=f"{key}__m5",  on_click=_shift_minutes, args=(-5,),  use_container_width=True)
+        c3.button("−10m", key=f"{key}__m10", on_click=_shift_minutes, args=(-10,), use_container_width=True)
+
+        picked = (st.session_state.get(widget_key) or picked).replace(second=0, microsecond=0)
+
+    return picked
 
 
 # =============================================================================
@@ -1120,7 +1129,7 @@ def render_event_tracker_tab() -> None:
         with col_d:
             d = st.date_input("Date", value=now.date(), key="add_date")
         with col_t:
-            t = time_selectbox("Time", default=now.time(), key="add_time", step_minutes=1)
+            t = time_picker("Time", default=now.time(), key="add_time", show_quick=True)
 
         ts = dt_to_iso(compose_dt(d, t))
 
@@ -1442,7 +1451,7 @@ def render_event_tracker_tab() -> None:
             with c1:
                 new_date = st.date_input("Date", value=ed.date(), key=f"ed_d_{e['id']}")
             with c2:
-                new_time = time_selectbox("Time", default=ed.time(), key=f"ed_t_{e['id']}", step_minutes=1)
+                new_time = time_picker("Time", default=ed.time(), key=f"ed_t_{e['id']}", show_quick=True)
 
             patch: Dict[str, Any] = {"ts": dt_to_iso(compose_dt(new_date, new_time))}
 
