@@ -423,6 +423,9 @@ def compose_dt(d: date, t: time) -> datetime:
 def format_snapshot_dt(dt: datetime) -> str:
     return f"{dt.strftime('%b')} {dt.day}, {dt.strftime('%H:%M')}"
 
+def format_snapshot_time(dt: Optional[datetime]) -> str:
+    return dt.strftime("%H:%M") if dt else "—"
+
 
 def time_picker(
     label: str,
@@ -636,6 +639,26 @@ def breast_side_status(events: List[Dict[str, Any]]) -> tuple[Optional[str], str
     assert last in {"L", "R"}
     return last, _toggle_side(last)
 
+def last_breastfeed_dt(events: List[Dict[str, Any]]) -> Optional[datetime]:
+    """Return the most recent breastfeeding timestamp, or None."""
+    latest: Optional[datetime] = None
+
+    for e in events:
+        if e.get("type") != "feeding" or (e.get("feed_mode") or "").strip().lower() != "breast":
+            continue
+        ts = e.get("ts")
+        if not ts:
+            continue
+        try:
+            dt = iso_to_dt(ts)
+        except Exception:
+            continue
+        if latest is None or dt > latest:
+            latest = dt
+
+    return latest
+
+
 
 # =============================================================================
 # UI helpers
@@ -758,8 +781,15 @@ def render_snapshot_tab() -> None:
     with st.container(border=True):
         st.markdown("#### Breastfeeding")
         last_side, next_side = breast_side_status(events)
-        st.metric("Last start side", last_side or "—")
-        st.caption(f"Next suggested start: {next_side}")
+        last_dt = last_breastfeed_dt(events)
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.metric("Most recent breastfeed", format_snapshot_time(last_dt))
+
+        with c2:
+            st.metric("Last start side", last_side or "—")
+
 
     # --- Vitamin D (once daily) ---
     with st.container(border=True):
