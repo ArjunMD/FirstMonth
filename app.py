@@ -1765,6 +1765,77 @@ def render_graph_tab() -> None:
 
         st.altair_chart((line + pts).properties(height=320), width="stretch")
 
+        # --- Two-point slope calculator (weight change) ---
+        with st.container(border=True):
+            st.markdown("#### Weight slope (pick 2 points)")
+
+            pts_df = df_w[["time", "weight_g"]].dropna().sort_values("time").reset_index(drop=True)
+
+            if len(pts_df) < 2:
+                st.info("Need at least 2 plot-worthy weights to compute a slope.")
+            else:
+                def _pt_label(i: int) -> str:
+                    r = pts_df.iloc[int(i)]
+                    dt0 = r["time"]
+                    g0 = float(r["weight_g"])
+                    lbs0, oz0 = grams_to_lbs_oz(g0)
+                    return f"{dt0.strftime('%b')} {dt0.day} {dt0.strftime('%H:%M')} — {g0:,.0f} g ({lbs0} lb {oz0:.1f} oz)"
+
+                options = list(range(len(pts_df)))
+
+                # Default to last two points
+                st.session_state.setdefault("wt_slope_p1", max(0, len(options) - 2))
+                st.session_state.setdefault("wt_slope_p2", max(1, len(options) - 1))
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    i1 = st.selectbox(
+                        "Point A",
+                        options=options,
+                        key="wt_slope_p1",
+                        format_func=_pt_label,
+                    )
+                with c2:
+                    i2 = st.selectbox(
+                        "Point B",
+                        options=options,
+                        key="wt_slope_p2",
+                        format_func=_pt_label,
+                    )
+
+                if int(i1) == int(i2):
+                    st.warning("Pick two different points.")
+                else:
+                    a = pts_df.iloc[int(i1)]
+                    b = pts_df.iloc[int(i2)]
+
+                    # Ensure chronological order
+                    if b["time"] < a["time"]:
+                        a, b = b, a
+
+                    dt_days = (b["time"] - a["time"]).total_seconds() / 86400.0
+                    if dt_days <= 0:
+                        st.warning("Those points have the same timestamp; pick different times.")
+                    else:
+                        dg = float(b["weight_g"]) - float(a["weight_g"])
+                        g_per_day = dg / dt_days
+                        oz_per_day = g_per_day / OZ_TO_G
+
+                        m1, m2, m3 = st.columns(3)
+                        with m1:
+                            st.metric("Slope (g/day)", f"{g_per_day:+.1f}")
+                        with m2:
+                            st.metric("Slope (oz/day)", f"{oz_per_day:+.2f}")
+                        with m3:
+                            st.metric("Δt", f"{dt_days:.2f} days")
+
+                        st.caption(
+                            f"Δweight: {dg:+.0f} g ({(dg / OZ_TO_G):+.2f} oz) "
+                            f"from {a['time'].strftime('%b')} {a['time'].day} {a['time'].strftime('%H:%M')} "
+                            f"to {b['time'].strftime('%b')} {b['time'].day} {b['time'].strftime('%H:%M')}."
+                        )
+
+
     st.divider()
 
     # -------------------------------------------------------------------------
