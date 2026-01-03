@@ -1965,6 +1965,16 @@ def render_graph_tab() -> None:
         y_title = "Cumulative intake (mL)"
         val_fmt = ".0f"
 
+    # --- Tooltip (for point hover) ---
+    df_pts = df_pts.copy()
+    df_pts["time_hm"] = df_pts["time"].dt.strftime("%H:%M")  # time only, no date/day
+
+    unit_lbl = "oz" if units == "oz" else "g"  # treat mL as g (1 mL ≈ 1 g)
+    df_pts["delta_val"] = df_pts["intake_ml"].apply(ml_to_floz) if units == "oz" else df_pts["intake_ml"]
+    df_pts["cum_val"] = df_pts["Value"]  # already in the selected units
+
+    delta_fmt = ".2f" if units == "oz" else ".1f"
+
     hour_ticks = list(range(0, 24 * 60 + 1, 60))  # 0, 60, 120, ... 1440
 
     x_enc = alt.X(
@@ -2015,10 +2025,9 @@ def render_graph_tab() -> None:
                 legend=None,
             ),
             tooltip=[
-                alt.Tooltip("Day:N", title="Day"),
-                alt.Tooltip("time:T", title="Time"),
-                alt.Tooltip("mode:N", title="Type"),
-                alt.Tooltip("Value:Q", title="Cumulative", format=val_fmt),
+                alt.Tooltip("time_hm:N", title="Time"),
+                alt.Tooltip("delta_val:Q", title=f"Delta ({unit_lbl})", format=delta_fmt),
+                alt.Tooltip("cum_val:Q", title=f"Cumulative since midnight ({unit_lbl})", format=val_fmt),
             ],
         )
     )
