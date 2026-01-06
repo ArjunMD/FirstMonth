@@ -757,12 +757,31 @@ def render_snapshot_tab() -> None:
     events = load_events()
     st.subheader("Snapshot")
 
-    # --- Last 3 naked weights ---
+    # --- Last 3 plot-worthy weights (naked + diaper-only, adjusted) ---
     with st.container(border=True):
-        st.markdown("#### Last 3 naked weights")
-        w = recent_naked_weights(events, n=3)
+        st.markdown("#### Last 3 weights")
+        w = []
+
+        for e in sorted(events, key=lambda x: x.get("ts", ""), reverse=True):
+            ts = e.get("ts")
+            if not ts:
+                continue
+
+            g_adj = weight_for_event_row(e)  # same logic as Graph (includes tare subtraction)
+            if g_adj is None:
+                continue
+
+            try:
+                dt0 = iso_to_dt(ts)
+            except Exception:
+                continue
+
+            w.append({"dt": dt0, "weight_g": float(g_adj)})
+            if len(w) >= 3:
+                break
+
         if not w:
-            st.info("No naked weights recorded yet.")
+            st.info("No plot-worthy weights recorded yet.")
         else:
             rows = []
             for item in w:
@@ -777,75 +796,56 @@ def render_snapshot_tab() -> None:
                 )
             st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
-    # --- Last breastfeeding side ---
-    with st.container(border=True):
-        st.markdown("#### Breastfeeding")
-        last_side, next_side = breast_side_status(events)
-        last_dt = last_breastfeed_dt(events)
 
-        c1, c2 = st.columns(2)
-        with c1:
-            st.metric("Most recent breastfeed", format_snapshot_time(last_dt))
+        # --- Last breastfeeding side ---
+        with st.container(border=True):
+            st.markdown("#### Breastfeeding")
+            last_side, next_side = breast_side_status(events)
+            last_dt = last_breastfeed_dt(events)
 
-        with c2:
-            st.metric("Last start side", last_side or "—")
-
-
-    # --- Vitamin D (once daily) ---
-    with st.container(border=True):
-        st.markdown("#### Vitamin D")
-        today_vitd = vitamin_d_given_dt(events, date.today())
-
-        if today_vitd is None:
-            c1, c2 = st.columns([1, 3])
+            c1, c2 = st.columns(2)
             with c1:
-                if st.button("✅ Yes", key="vitd_yes"):
-                    e = {
-                        "id": str(uuid.uuid4()),
-                        "type": VITD_EVENT_TYPE,
-                        "ts": dt_to_iso(datetime.now()),
-                        "notes": "",
-                    }
-                    add_event(events, e)
-                    st.rerun()
+                st.metric("Most recent breastfeed", format_snapshot_time(last_dt))
+
             with c2:
-                st.caption("Not recorded yet today.")
-        else:
-            st.success(f"Given at {today_vitd.strftime('%H:%M')}")
+                st.metric("Last start side", last_side or "—")
 
-    # --- Today's goal + intake + pace ---
-    today = date.today()
-    now_dt = datetime.now()
-    midnight = datetime.combine(today, time(0, 0, 0))
-    elapsed_hours = max((now_dt - midnight).total_seconds() / 3600.0, 1e-6)
 
-    goal_floz_today: Optional[float] = None
-    if st.session_state.get("goal_date") == str(today):
-        g = st.session_state.get("goal_floz")
-        goal_floz_today = float(g) if g is not None else None
+        # --- Vitamin D (once daily) ---
+        with st.container(border=True):
+            st.markdown("#### Vitamin D")
+            today_vitd = vitamin_d_given_dt(events, date.today())
 
-    # Intake so far today
-    today_total_ml = 0.0
-    for e in events:
-        ts = e.get("ts")
-        if not ts:
-            continue
-        try:
-            dt = iso_to_dt(ts)
-        except Exception:
-            continue
-        if dt.date() != today:
-            continue
-        ml = feeding_intake_ml(e)
-        if ml is None:
-            continue
-        today_total_ml += float(ml)
+            if today_vitd is None:
+                c1, c2 = st.columns([1, 3])
+                with c1:
+                    if st.button("✅ Yes", key="vitd_yes"):
+                        e = {
+                            "id": str(uuid.uuid4()),
+                            "type": VITD_EVENT_TYPE,
+                            "ts": dt_to_iso(datetime.now()),
+                            "notes": "",
+                        }
+                        add_event(events, e)
+                        st.rerun()
+                with c2:
+                    st.caption("Not recorded yet today.")
+            else:
+                st.success(f"Given at {today_vitd.strftime('%H:%M')}")
 
-    today_total_floz = ml_to_floz(today_total_ml)
+        # --- Today's goal + intake + pace ---
+        today = date.today()
+        now_dt = datetime.now()
+        midnight = datetime.combine(today, time(0, 0, 0))
+        elapsed_hours = max((now_dt - midnight).total_seconds() / 3600.0, 1e-6)
 
-    # Previous two daily intakes
-    def _day_intake_ml(day0: date) -> float:
-        total = 0.0
+        goal_floz_today: Optional[float] = None
+        if st.session_state.get("goal_date") == str(today):
+            g = st.session_state.get("goal_floz")
+            goal_floz_today = float(g) if g is not None else None
+
+        # Intake so far today
+        today_total_ml = 0.0
         for e in events:
             ts = e.get("ts")
             if not ts:
@@ -854,93 +854,113 @@ def render_snapshot_tab() -> None:
                 dt = iso_to_dt(ts)
             except Exception:
                 continue
-            if dt.date() != day0:
+            if dt.date() != today:
                 continue
             ml = feeding_intake_ml(e)
             if ml is None:
                 continue
-            total += float(ml)
-        return total
+            today_total_ml += float(ml)
 
-    prev_days = [today - timedelta(days=1), today - timedelta(days=2)]
-    prev_rows = []
-    for d0 in prev_days:
-        ml0 = _day_intake_ml(d0)
-        label = "Yesterday" if d0 == (today - timedelta(days=1)) else "2 days ago"
-        prev_rows.append(
-            {"Day": f"{label} ({d0.strftime('%b')} {d0.day})", "Intake (oz)": round(ml_to_floz(ml0), 2)}
-        )
+        today_total_floz = ml_to_floz(today_total_ml)
 
-    with st.container(border=True):
-        st.markdown("#### Today")
-
-        if goal_floz_today is None or goal_floz_today <= 0:
-            c1, c2 = st.columns(2)
-            with c1:
-                st.metric("Intake so far", f"{today_total_floz:.2f} oz")
-                st.caption(f"{today_total_ml:,.0f} mL")
-            with c2:
-                st.metric("Current pace", f"{(today_total_floz / elapsed_hours):.2f} oz/hr")
-                st.caption("Set a goal in the Calculator tab to show on-pace status.")
-        else:
-            remaining_floz = max(goal_floz_today - today_total_floz, 0.0)
-            remaining_hours = max(24.0 - elapsed_hours, 1e-6)
-
-            expected_by_now = goal_floz_today * (elapsed_hours / 24.0)
-            delta = today_total_floz - expected_by_now  # + ahead, - behind
-            pct = min(today_total_floz / goal_floz_today, 1.0)
-
-            r1, r2, r3 = st.columns(3)
-            with r1:
-                st.metric("Intake so far", f"{today_total_floz:.2f} oz")
-                st.caption(f"{today_total_ml:,.0f} mL")
-            with r2:
-                st.metric("Goal", f"{goal_floz_today:.1f} oz")
-                st.caption(f"≈ {floz_to_ml(goal_floz_today):,.0f} mL")
-            with r3:
-                st.metric("Remaining", f"{remaining_floz:.2f} oz")
-                st.caption(f"Needed pace: {(remaining_floz / remaining_hours):.2f} oz/hr")
-
-            st.progress(pct)
-
-            if delta >= 0:
-                st.caption(f"On pace for midnight (ahead by {delta:.2f} oz vs steady pace).")
-            else:
-                st.caption(f"Behind pace for midnight ({abs(delta):.2f} oz behind steady pace).")
-
-
-
-
-            st.divider()
-            st.markdown("##### Previous days")
-            st.dataframe(pd.DataFrame(prev_rows), hide_index=True, width="stretch")
-
-    # --- Priority groceries (undone priority only) ---
-    groceries = load_groceries()
-    pri_pending = [it for it in groceries if (not bool(it.get("done"))) and bool(it.get("priority", False))]
-    pri_pending = sorted(pri_pending, key=lambda x: x.get("created_ts", ""))  # oldest first
-
-    if pri_pending:
-        with st.container(border=True):
-            st.markdown("#### Priority groceries")
-            max_show = 12
-            show = pri_pending[:max_show]
-
-            by_store: Dict[str, List[str]] = {}
-            for it in show:
-                store = str(it.get("store") or "Grocery/Any")
-                text = str(it.get("text") or "").strip()
-                if not text:
+        # Previous two daily intakes
+        def _day_intake_ml(day0: date) -> float:
+            total = 0.0
+            for e in events:
+                ts = e.get("ts")
+                if not ts:
                     continue
-                by_store.setdefault(store, []).append(text)
+                try:
+                    dt = iso_to_dt(ts)
+                except Exception:
+                    continue
+                if dt.date() != day0:
+                    continue
+                ml = feeding_intake_ml(e)
+                if ml is None:
+                    continue
+                total += float(ml)
+            return total
 
-            for store in GROCERY_STORES:
-                items_here = by_store.get(store) or []
-                if items_here:
-                    st.markdown(f"**{store}**: " + " • ".join(items_here))
+        prev_days = [today - timedelta(days=1), today - timedelta(days=2)]
+        prev_rows = []
+        for d0 in prev_days:
+            ml0 = _day_intake_ml(d0)
+            label = "Yesterday" if d0 == (today - timedelta(days=1)) else "2 days ago"
+            prev_rows.append(
+                {"Day": f"{label} ({d0.strftime('%b')} {d0.day})", "Intake (oz)": round(ml_to_floz(ml0), 2)}
+            )
 
-            if len(pri_pending) > max_show:
-                st.caption(f"…and {len(pri_pending) - max_show} more (see Groceries tab).")
+        with st.container(border=True):
+            st.markdown("#### Today")
+
+            if goal_floz_today is None or goal_floz_today <= 0:
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.metric("Intake so far", f"{today_total_floz:.2f} oz")
+                    st.caption(f"{today_total_ml:,.0f} mL")
+                with c2:
+                    st.metric("Current pace", f"{(today_total_floz / elapsed_hours):.2f} oz/hr")
+                    st.caption("Set a goal in the Calculator tab to show on-pace status.")
+            else:
+                remaining_floz = max(goal_floz_today - today_total_floz, 0.0)
+                remaining_hours = max(24.0 - elapsed_hours, 1e-6)
+
+                expected_by_now = goal_floz_today * (elapsed_hours / 24.0)
+                delta = today_total_floz - expected_by_now  # + ahead, - behind
+                pct = min(today_total_floz / goal_floz_today, 1.0)
+
+                r1, r2, r3 = st.columns(3)
+                with r1:
+                    st.metric("Intake so far", f"{today_total_floz:.2f} oz")
+                    st.caption(f"{today_total_ml:,.0f} mL")
+                with r2:
+                    st.metric("Goal", f"{goal_floz_today:.1f} oz")
+                    st.caption(f"≈ {floz_to_ml(goal_floz_today):,.0f} mL")
+                with r3:
+                    st.metric("Remaining", f"{remaining_floz:.2f} oz")
+                    st.caption(f"Needed pace: {(remaining_floz / remaining_hours):.2f} oz/hr")
+
+                st.progress(pct)
+
+                if delta >= 0:
+                    st.caption(f"On pace for midnight (ahead by {delta:.2f} oz vs steady pace).")
+                else:
+                    st.caption(f"Behind pace for midnight ({abs(delta):.2f} oz behind steady pace).")
+
+
+
+
+                st.divider()
+                st.markdown("##### Previous days")
+                st.dataframe(pd.DataFrame(prev_rows), hide_index=True, width="stretch")
+
+        # --- Priority groceries (undone priority only) ---
+        groceries = load_groceries()
+        pri_pending = [it for it in groceries if (not bool(it.get("done"))) and bool(it.get("priority", False))]
+        pri_pending = sorted(pri_pending, key=lambda x: x.get("created_ts", ""))  # oldest first
+
+        if pri_pending:
+            with st.container(border=True):
+                st.markdown("#### Priority groceries")
+                max_show = 12
+                show = pri_pending[:max_show]
+
+                by_store: Dict[str, List[str]] = {}
+                for it in show:
+                    store = str(it.get("store") or "Grocery/Any")
+                    text = str(it.get("text") or "").strip()
+                    if not text:
+                        continue
+                    by_store.setdefault(store, []).append(text)
+
+                for store in GROCERY_STORES:
+                    items_here = by_store.get(store) or []
+                    if items_here:
+                        st.markdown(f"**{store}**: " + " • ".join(items_here))
+
+                if len(pri_pending) > max_show:
+                    st.caption(f"…and {len(pri_pending) - max_show} more (see Groceries tab).")
 
 
 def render_calculator_tab() -> None:
